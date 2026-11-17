@@ -37,6 +37,36 @@ def _secret(name: str, default: str = "") -> str:
     return value or os.getenv(name, default) or default
 
 
+def _friendly_key_error(exc: Exception) -> str:
+    """Turn an OpenAI auth failure into something a human can act on."""
+    text = str(exc)
+    lowered = text.lower()
+    if "401" in text or "invalid_api_key" in lowered or "incorrect api key" in lowered:
+        return (
+            "**This key is rejected by OpenAI (401).**\n\n"
+            "The key is wrong, truncated, or was deleted. Fix it:\n\n"
+            "1. Open https://platform.openai.com/api-keys\n"
+            "2. Click **Create new secret key** (name it `DA Sumit`)\n"
+            "3. Click the **📋 copy icon** — the full key starts with `sk-proj-` "
+            "or `sk-` and is ~50–160 characters\n"
+            "4. Paste it here. Never copy the short `sk-proj-…abcd` text shown in "
+            "the key table — that is a truncated preview.\n\n"
+            "A ChatGPT Plus subscription does **not** include API access."
+        )
+    if "429" in text or "insufficient_quota" in lowered or "quota" in lowered:
+        return (
+            "**Your OpenAI account has no credit left (429).**\n\n"
+            "Add billing: https://platform.openai.com/settings/organization/billing\n"
+            "A prepaid top-up of ~$5 is plenty — `gpt-4o-mini` costs a fraction of a cent "
+            "per request."
+        )
+    if "rate" in lowered and "limit" in lowered:
+        return "**Rate limited by OpenAI.** Wait ~30 seconds and try again."
+    if "connect" in lowered or "timeout" in lowered or "network" in lowered:
+        return "**Network problem reaching OpenAI.** Check your internet connection and retry."
+    return f"Key test failed: {text}"
+
+
 # --------------------------------------------------------------------------- #
 # Session state
 # --------------------------------------------------------------------------- #
@@ -52,6 +82,10 @@ def init_state() -> None:
         ss.loaded_files = set()
     if "api_key" not in ss:
         ss.api_key = ""
+    if "key_ok" not in ss:
+        ss.key_ok = None
+    if "key_error" not in ss:
+        ss.key_error = ""
     if "model" not in ss:
         ss.model = config.DEFAULT_MODEL
     if "dashboard_html" not in ss:
@@ -105,16 +139,24 @@ with st.sidebar:
         type="password",
         help="Leave blank to use OPENAI_API_KEY from your .env file.",
     )
-    st.session_state.api_key = typed_key
-    effective_key = typed_key or env_key
+    st.session_state.api_key = (typed_key or "").strip()
+    effective_key = (st.session_state.api_key or env_key or "").strip()
+
     if effective_key:
-        st.success("API key ready", icon="✅")
         if st.button("🔌 Test key", use_container_width=True):
             try:
                 config.get_client(effective_key).models.list()
-                st.success("Key works — you're ready to go!")
+                st.session_state.key_ok = True
+                st.session_state.key_error = ""
             except Exception as exc:  # noqa: BLE001
-                st.error(f"Key test failed: {exc}")
+                st.session_state.key_ok = False
+                st.session_state.key_error = _friendly_key_error(exc)
+        if st.session_state.key_ok:
+            st.success("Key verified — ready to go", icon="✅")
+        elif st.session_state.key_error:
+            st.error(st.session_state.key_error)
+        else:
+            st.info("Key saved. Click **Test key** to verify it.", icon="🔑")
     else:
         st.warning("Add an OpenAI API key to start.", icon="⚠️")
 
@@ -234,7 +276,10 @@ with tab_chat:
                     elif event["type"] == "final":
                         final_text = event["content"]
                     elif event["type"] == "error":
-                        final_text = f"⚠️ {event['content']}"
+                        content = str(event.get("content", ""))
+                        if "401" in content or "invalid_api_key" in content.lower():
+                            content = _friendly_key_error(Exception(content))
+                        final_text = f"⚠️ {content}"
                 status.update(label=f"{AGENT_NAME} finished", state="complete", expanded=False)
 
                 st.markdown(final_text or "_(no response)_")
