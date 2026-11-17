@@ -28,6 +28,36 @@ def _is_model_error(exc: BaseException) -> bool:
     return any(hint in text for hint in _MODEL_ERROR_HINTS)
 
 
+def _is_bad_request(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return "400" in text or "bad request" in text or "invalid_argument" in text
+
+
+def _error_detail(exc: BaseException) -> str:
+    """Best-effort readable message, including the provider's raw error body."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error") if isinstance(body.get("error"), dict) else body
+        if isinstance(err, dict):
+            message = err.get("message") or err.get("status")
+            if message:
+                return str(message)
+    response = getattr(exc, "response", None)
+    text = getattr(response, "text", "") if response is not None else ""
+    if text:
+        return str(text)[:800]
+    return str(exc) or type(exc).__name__
+
+
+def _error_text(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {_error_detail(exc)}"
+
+
+def _is_gemini(model: str | None) -> bool:
+    name = (model or "").strip().lower()
+    return name.startswith("gemini") or name.startswith("gemma")
+
+
 class Sumit07Agent:
     """Runs the reasoning loop and yields events for a streaming UI."""
 
@@ -46,8 +76,16 @@ class Sumit07Agent:
         self.scope_guard = config.SCOPE_GUARD if scope_guard is None else scope_guard
 
     # -- model resilience ----------------------------------------------------
-    def _chat(self, **kwargs: Any) -> Any:
-        """Call the API, silently moving to another model if this one is retired."""
+    def _chat(self, retry_on_bad_request: bool = False, **kwargs: Any) -> Any:
+        """Call the API, moving to another model when this one can't serve us.
+
+        Gemini's OpenAI-compatible layer rejects some arguments that OpenAI
+        accepts, so ``tool_choice`` is dropped and Lite models (which have
+        limited function calling) fall through to a full Flash model.
+        """
+        if _is_gemini(self.model):
+            kwargs.pop("tool_choice", None)
+
         candidates = config.fallback_models(self.model)
         tried: List[str] = [self.model] + [m for m in candidates if m != self.model]
         last_exc: Optional[BaseException] = None
@@ -56,7 +94,12 @@ class Sumit07Agent:
                 resp = self.client.chat.completions.create(model=model, **kwargs)
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
-                if not _is_model_error(exc) or index == len(tried) - 1:
+                if index == len(tried) - 1:
+                    raise
+                recoverable = _is_model_error(exc) or (
+                    retry_on_bad_request and _is_bad_request(exc)
+                )
+                if not recoverable:
                     raise
                 continue
             self.model = model  # remember what actually worked
@@ -77,8 +120,13 @@ class Sumit07Agent:
                 "content": f"Conversation so far:\n{convo}\n\nLatest user request:\n{text}",
             },
         ]
-        # Newer models reject `max_tokens`; older ones reject `max_completion_tokens`.
-        for token_param in ("max_completion_tokens", "max_tokens"):
+        # Gemini wants `max_tokens`; newer OpenAI models want `max_completion_tokens`.
+        token_params = (
+            ("max_tokens", "max_completion_tokens")
+            if _is_gemini(self.model)
+            else ("max_completion_tokens", "max_tokens")
+        )
+        for token_param in token_params:
             try:
                 resp = self._chat(messages=messages, temperature=0, **{token_param: 4})
             except Exception:  # noqa: BLE001 - never block the user on a guard failure
@@ -107,13 +155,14 @@ class Sumit07Agent:
         for _ in range(self.max_steps):
             try:
                 resp = self._chat(
+                    retry_on_bad_request=True,
                     messages=messages,
                     tools=self.tools.schemas(),
                     tool_choice="auto",
                     temperature=0.2,
                 )
             except Exception as exc:  # noqa: BLE001
-                yield {"type": "error", "content": f"{type(exc).__name__}: {exc}"}
+                yield {"type": "error", "content": _error_text(exc)}
                 return
 
             message = resp.choices[0].message
