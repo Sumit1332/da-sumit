@@ -48,7 +48,8 @@ class Sumit07Agent:
     # -- model resilience ----------------------------------------------------
     def _chat(self, **kwargs: Any) -> Any:
         """Call the API, silently moving to another model if this one is retired."""
-        tried: List[str] = [self.model] + [m for m in config.FALLBACK_MODELS if m != self.model]
+        candidates = config.fallback_models(self.model)
+        tried: List[str] = [self.model] + [m for m in candidates if m != self.model]
         last_exc: Optional[BaseException] = None
         for index, model in enumerate(tried):
             try:
