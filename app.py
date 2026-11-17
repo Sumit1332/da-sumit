@@ -63,12 +63,17 @@ def _friendly_key_error(exc: Exception) -> str:
             "(e.g. `gpt-6-luna`, `gpt-6.1-terra`). Sumit07 also retries "
             "automatically, so a stale choice will not stop a request."
         )
-    if "429" in text or "insufficient_quota" in lowered or "quota" in lowered:
+    if "429" in text or "insufficient_quota" in lowered or "quota" in lowered or "credits" in lowered:
         return (
-            "**Your OpenAI account has no credit left (429).**\n\n"
-            "Add billing: https://platform.openai.com/settings/organization/billing\n"
-            "A prepaid top-up of ~$5 is plenty — `gpt-4o-mini` costs a fraction of a cent "
-            "per request."
+            "**Your OpenAI account has $0 balance (429 — no credits remaining).**\n\n"
+            "The API is pay-as-you-go and is **not** included with ChatGPT Plus. "
+            "Nothing in this app can change that — the account needs a balance.\n\n"
+            "**Add credit:**\n"
+            "1. Open https://platform.openai.com/settings/organization/billing/overview\n"
+            "2. Click **Add payment details** → add a card\n"
+            "3. Buy the minimum prepaid amount (usually **$5**)\n"
+            "4. Come back here and send your request again — no restart needed\n\n"
+            "With `gpt-6-luna`, $5 covers thousands of questions about a CSV."
         )
     if "rate" in lowered and "limit" in lowered:
         return "**Rate limited by OpenAI.** Wait ~30 seconds and try again."
@@ -311,7 +316,7 @@ with tab_chat:
                     elif event["type"] == "error":
                         content = str(event.get("content", ""))
                         lowered = content.lower()
-                        if any(hit in lowered for hit in ("401", "invalid_api_key", "404", "model_not_found", "has been deprecated")):
+                        if any(hit in lowered for hit in ("401", "invalid_api_key", "404", "model_not_found", "has been deprecated", "429", "quota", "credits")):
                             content = _friendly_key_error(Exception(content))
                         final_text = f"⚠️ {content}"
                 status.update(label=f"{AGENT_NAME} finished", state="complete", expanded=False)
