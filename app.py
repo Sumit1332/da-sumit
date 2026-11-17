@@ -74,6 +74,17 @@ def _friendly_key_error(exc: Exception) -> str:
             "(e.g. `gpt-6-luna`, `gpt-6.1-terra`). Sumit07 also retries "
             "automatically, so a stale choice will not stop a request."
         )
+    if "400" in text or "invalid_argument" in lowered or "bad request" in lowered:
+        detail = text.strip()
+        if len(detail) > 700:
+            detail = detail[:700] + "…"
+        return (
+            "**The provider rejected the request (400).**\n\n"
+            f"```\n{detail}\n```\n\n"
+            "Most common cause: the selected model cannot use tools. Set "
+            "**Model → `gemini-3.8-flash`** (or `gemini-3.6-flash`) and retry. "
+            "Lite models have limited function-calling support."
+        )
     if "429" in text or "insufficient_quota" in lowered or "quota" in lowered or "credits" in lowered:
         return (
             "**No credits / quota exhausted (429).**\n\n"
@@ -338,7 +349,7 @@ with tab_chat:
                     elif event["type"] == "error":
                         content = str(event.get("content", ""))
                         lowered = content.lower()
-                        if any(hit in lowered for hit in ("401", "invalid_api_key", "404", "model_not_found", "has been deprecated", "429", "quota", "credits")):
+                        if any(hit in lowered for hit in ("401", "invalid_api_key", "404", "model_not_found", "has been deprecated", "429", "quota", "credits", "400", "invalid_argument", "bad request", "api key not valid")):
                             content = _friendly_key_error(Exception(content))
                         final_text = f"⚠️ {content}"
                 status.update(label=f"{AGENT_NAME} finished", state="complete", expanded=False)
