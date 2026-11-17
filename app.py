@@ -53,6 +53,16 @@ def _friendly_key_error(exc: Exception) -> str:
             "the key table — that is a truncated preview.\n\n"
             "A ChatGPT Plus subscription does **not** include API access."
         )
+    if "404" in text or "model_not_found" in lowered or "has been deprecated" in lowered:
+        return (
+            "**That model has been retired by OpenAI (404).**\n\n"
+            "OpenAI shut down the GPT-4 era models (`gpt-4-turbo`, `gpt-4`, "
+            "`gpt-3.5-turbo`, `o1`, `o3-mini`, `o4-mini`) on 23 Oct 2026, and the "
+            "GPT-4o family follows on 14 Jan 2027.\n\n"
+            "Click **🔄 Refresh models** in the sidebar and pick a current model "
+            "(e.g. `gpt-6-luna`, `gpt-6.1-terra`). Sumit07 also retries "
+            "automatically, so a stale choice will not stop a request."
+        )
     if "429" in text or "insufficient_quota" in lowered or "quota" in lowered:
         return (
             "**Your OpenAI account has no credit left (429).**\n\n"
@@ -86,6 +96,10 @@ def init_state() -> None:
         ss.key_ok = None
     if "key_error" not in ss:
         ss.key_error = ""
+    if "model_options" not in ss:
+        ss.model_options = []
+    if "models_loaded" not in ss:
+        ss.models_loaded = False
     if "model" not in ss:
         ss.model = config.DEFAULT_MODEL
     if "dashboard_html" not in ss:
@@ -160,9 +174,28 @@ with st.sidebar:
     else:
         st.warning("Add an OpenAI API key to start.", icon="⚠️")
 
-    models = config.AVAILABLE_MODELS
-    default_index = models.index(st.session_state.model) if st.session_state.model in models else 0
-    st.session_state.model = st.selectbox("Model", models, index=default_index)
+    # Pull the live model list so retired models (gpt-4-turbo et al.) never
+    # appear in the dropdown.
+    if effective_key and not st.session_state.models_loaded:
+        try:
+            with st.spinner("Loading available models…"):
+                found = config.list_chat_models(effective_key)
+        except Exception:  # noqa: BLE001 - fall back to the static list
+            found = []
+        if found:
+            st.session_state.model_options = found
+            st.session_state.models_loaded = True
+
+    models = st.session_state.model_options or config.AVAILABLE_MODELS
+    if st.session_state.model not in models:
+        st.session_state.model = models[0]
+    st.session_state.model = st.selectbox(
+        "Model", models, index=models.index(st.session_state.model)
+    )
+    if st.button("🔄 Refresh models", use_container_width=True):
+        st.session_state.models_loaded = False
+        st.session_state.model_options = []
+        st.rerun()
 
     st.divider()
     st.subheader("📁 Upload data")
@@ -277,7 +310,8 @@ with tab_chat:
                         final_text = event["content"]
                     elif event["type"] == "error":
                         content = str(event.get("content", ""))
-                        if "401" in content or "invalid_api_key" in content.lower():
+                        lowered = content.lower()
+                        if any(hit in lowered for hit in ("401", "invalid_api_key", "404", "model_not_found", "has been deprecated")):
                             content = _friendly_key_error(Exception(content))
                         final_text = f"⚠️ {content}"
                 status.update(label=f"{AGENT_NAME} finished", state="complete", expanded=False)
