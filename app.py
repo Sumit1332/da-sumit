@@ -53,6 +53,17 @@ def _friendly_key_error(exc: Exception) -> str:
             "the key table — that is a truncated preview.\n\n"
             "A ChatGPT Plus subscription does **not** include API access."
         )
+    if "api key not valid" in lowered or "api_key_invalid" in lowered or "invalid api key" in lowered:
+        return (
+            "**Google rejected that API key (400).**\n\n"
+            "Fix it:\n"
+            "1. Open https://aistudio.google.com/apikey\n"
+            "2. Click **Create API key** and copy the whole value — it starts "
+            "with `AIza`\n"
+            "3. Streamlit → **Settings → Secrets** → set:\n\n"
+            "```toml\nGEMINI_API_KEY = \"AIza...\"\n```\n\n"
+            "Gemini's free tier needs no credit card."
+        )
     if "404" in text or "model_not_found" in lowered or "has been deprecated" in lowered:
         return (
             "**That model has been retired by OpenAI (404).**\n\n"
@@ -65,15 +76,18 @@ def _friendly_key_error(exc: Exception) -> str:
         )
     if "429" in text or "insufficient_quota" in lowered or "quota" in lowered or "credits" in lowered:
         return (
-            "**Your OpenAI account has $0 balance (429 — no credits remaining).**\n\n"
-            "The API is pay-as-you-go and is **not** included with ChatGPT Plus. "
-            "Nothing in this app can change that — the account needs a balance.\n\n"
-            "**Add credit:**\n"
-            "1. Open https://platform.openai.com/settings/organization/billing/overview\n"
-            "2. Click **Add payment details** → add a card\n"
-            "3. Buy the minimum prepaid amount (usually **$5**)\n"
-            "4. Come back here and send your request again — no restart needed\n\n"
-            "With `gpt-6-luna`, $5 covers thousands of questions about a CSV."
+            "**No credits / quota exhausted (429).**\n\n"
+            "**If you're on Google Gemini (free tier):** you've hit the free "
+            "request limit for this model. Wait a few minutes, or pick a lighter "
+            "model in the sidebar (e.g. `gemini-3.5-flash-lite`). Free limits reset "
+            "daily.\n\n"
+            "**If you're on OpenAI:** the account balance is $0. The API is "
+            "pay-as-you-go and is **not** included with ChatGPT Plus:\n"
+            "1. https://platform.openai.com/settings/organization/billing/overview\n"
+            "2. **Add payment details** → buy the minimum prepaid amount (~$5)\n"
+            "3. Resend your request — no restart needed\n\n"
+            "Tip: switch to Gemini's free tier by setting `GEMINI_API_KEY` in "
+            "Streamlit secrets."
         )
     if "rate" in lowered and "limit" in lowered:
         return "**Rate limited by OpenAI.** Wait ~30 seconds and try again."
@@ -151,12 +165,20 @@ with st.sidebar:
     st.caption(APP_TAGLINE)
 
     st.subheader("🔑 Model access")
-    env_key = _secret("OPENAI_API_KEY") or config.get_api_key()
+    env_key = (
+        _secret("GEMINI_API_KEY")
+        or _secret("GOOGLE_API_KEY")
+        or _secret("OPENAI_API_KEY")
+        or config.get_api_key()
+    )
     typed_key = st.text_input(
-        "OpenAI API key",
+        "API key",
         value=st.session_state.api_key,
         type="password",
-        help="Leave blank to use OPENAI_API_KEY from your .env file.",
+        help=(
+            "Google Gemini keys start with AIza (free tier) · OpenAI keys start "
+            "with sk-. Leave blank to use the key from Streamlit secrets or .env."
+        ),
     )
     st.session_state.api_key = (typed_key or "").strip()
     effective_key = (st.session_state.api_key or env_key or "").strip()
@@ -191,7 +213,7 @@ with st.sidebar:
             st.session_state.model_options = found
             st.session_state.models_loaded = True
 
-    models = st.session_state.model_options or config.AVAILABLE_MODELS
+    models = st.session_state.model_options or config.preferred_models(effective_key)
     if st.session_state.model not in models:
         st.session_state.model = models[0]
     st.session_state.model = st.selectbox(
