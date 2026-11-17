@@ -9,6 +9,24 @@ from . import AGENT_NAME, config
 from .prompts import REFUSAL_MESSAGE, SCOPE_CLASSIFIER_PROMPT, SYSTEM_PROMPT
 from .tools import DataAnalystTools
 
+# OpenAI retires models regularly (gpt-4-turbo et al. were shut down on
+# 23 Oct 2026). When that happens the API answers 404 model_not_found, so we
+# transparently retry with the next model in config.FALLBACK_MODELS.
+_MODEL_ERROR_HINTS = (
+    "model_not_found",
+    "does not exist",
+    "has been deprecated",
+    "was deprecated",
+    "no longer supported",
+    "decommissioned",
+    "404",
+)
+
+
+def _is_model_error(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(hint in text for hint in _MODEL_ERROR_HINTS)
+
 
 class Sumit07Agent:
     """Runs the reasoning loop and yields events for a streaming UI."""
@@ -27,6 +45,23 @@ class Sumit07Agent:
         self.max_steps = max_steps or config.MAX_AGENT_STEPS
         self.scope_guard = config.SCOPE_GUARD if scope_guard is None else scope_guard
 
+    # -- model resilience ----------------------------------------------------
+    def _chat(self, **kwargs: Any) -> Any:
+        """Call the API, silently moving to another model if this one is retired."""
+        tried: List[str] = [self.model] + [m for m in config.FALLBACK_MODELS if m != self.model]
+        last_exc: Optional[BaseException] = None
+        for index, model in enumerate(tried):
+            try:
+                resp = self.client.chat.completions.create(model=model, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if not _is_model_error(exc) or index == len(tried) - 1:
+                    raise
+                continue
+            self.model = model  # remember what actually worked
+            return resp
+        raise last_exc if last_exc else RuntimeError("No usable model available")
+
     # -- scope enforcement ---------------------------------------------------
     def _in_scope(self, text: str, history: List[Dict[str, str]]) -> bool:
         """Ask the model to classify the request as data-analysis or not."""
@@ -34,23 +69,22 @@ class Sumit07Agent:
             return True
         recent = history[-4:]
         convo = "\n".join(f"{m.get('role')}: {str(m.get('content'))[:400]}" for m in recent)
-        try:
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": SCOPE_CLASSIFIER_PROMPT},
-                    {
-                        "role": "user",
-                        "content": f"Conversation so far:\n{convo}\n\nLatest user request:\n{text}",
-                    },
-                ],
-                temperature=0,
-                max_tokens=4,
-            )
+        messages = [
+            {"role": "system", "content": SCOPE_CLASSIFIER_PROMPT},
+            {
+                "role": "user",
+                "content": f"Conversation so far:\n{convo}\n\nLatest user request:\n{text}",
+            },
+        ]
+        # Newer models reject `max_tokens`; older ones reject `max_completion_tokens`.
+        for token_param in ("max_completion_tokens", "max_tokens"):
+            try:
+                resp = self._chat(messages=messages, temperature=0, **{token_param: 4})
+            except Exception:  # noqa: BLE001 - never block the user on a guard failure
+                continue
             verdict = (resp.choices[0].message.content or "").strip().upper()
             return not verdict.startswith("OFF")
-        except Exception:  # noqa: BLE001 - never block the user on a guard failure
-            return True
+        return True
 
     # -- main loop -----------------------------------------------------------
     def run(
@@ -71,8 +105,7 @@ class Sumit07Agent:
 
         for _ in range(self.max_steps):
             try:
-                resp = self.client.chat.completions.create(
-                    model=self.model,
+                resp = self._chat(
                     messages=messages,
                     tools=self.tools.schemas(),
                     tool_choice="auto",
