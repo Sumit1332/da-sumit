@@ -1,0 +1,13 @@
+# DA Sumit - Streamlit configuration
+# Kept minimal and cloud-safe: address/port/headless are passed on the command
+# line locally (launch.py), so nothing here breaks a cloud deployment.
+
+[browser]
+gatherUsageStats = false
+
+[server]
+showEmailPrompt = false
+
+[client]
+showErrorDetails = true
+toolbarMode = "minimal"
