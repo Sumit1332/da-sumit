@@ -43,15 +43,13 @@ def _friendly_key_error(exc: Exception) -> str:
     lowered = text.lower()
     if "401" in text or "invalid_api_key" in lowered or "incorrect api key" in lowered:
         return (
-            "**This key is rejected by OpenAI (401).**\n\n"
-            "The key is wrong, truncated, or was deleted. Fix it:\n\n"
-            "1. Open https://platform.openai.com/api-keys\n"
-            "2. Click **Create new secret key** (name it `DA Sumit`)\n"
-            "3. Click the **📋 copy icon** — the full key starts with `sk-proj-` "
-            "or `sk-` and is ~50–160 characters\n"
-            "4. Paste it here. Never copy the short `sk-proj-…abcd` text shown in "
-            "the key table — that is a truncated preview.\n\n"
-            "A ChatGPT Plus subscription does **not** include API access."
+            "**This key was rejected (401).**\n\n"
+            "The key is wrong, truncated, or was deleted. Create a fresh one:\n\n"
+            "- **Groq:** https://console.groq.com/keys → starts with `gsk_`\n"
+            "- **OpenAI:** https://platform.openai.com/api-keys → starts with `sk-`\n\n"
+            "Click the copy icon in the create dialog — never copy the shortened "
+            "preview shown in the key table.\n\n"
+            "Then click **🔌 Test key** to confirm before asking a question."
         )
     if "api key not valid" in lowered or "api_key_invalid" in lowered or "invalid api key" in lowered:
         return (
@@ -95,6 +93,13 @@ def _friendly_key_error(exc: Exception) -> str:
             "- **Per day** — no retry can help. Wait until the quota resets "
             "(midnight Pacific), or create a key in a second Google Cloud project "
             "at https://aistudio.google.com/apikey\n\n"
+            "**Fastest escape hatch — add a free Groq key:**\n"
+            "1. https://console.groq.com/keys → **Create API Key** (no card)\n"
+            "2. Streamlit → **Settings → Secrets** → `GROQ_API_KEY = \"gsk_...\"`\n"
+            "3. Save, then click **🔄 Refresh models** and pick "
+            "`openai/gpt-oss-120b`\n\n"
+            "Groq's free tier allows ~1,000 requests/minute, so this will not "
+            "run out mid-job.\n\n"
             "Stay on **`gemini-3.8-flash`** — the *Lite* models can't run "
             "Sumit07's data tools.\n\n"
             "**Tip:** each question costs several model calls (one guard check + "
@@ -186,6 +191,7 @@ with st.sidebar:
     env_key = (
         _secret("GEMINI_API_KEY")
         or _secret("GOOGLE_API_KEY")
+        or _secret("GROQ_API_KEY")
         or _secret("OPENAI_API_KEY")
         or config.get_api_key()
     )
@@ -194,8 +200,9 @@ with st.sidebar:
         value=st.session_state.api_key,
         type="password",
         help=(
-            "Google Gemini keys start with AIza (free tier) · OpenAI keys start "
-            "with sk-. Leave blank to use the key from Streamlit secrets or .env."
+            "Google Gemini keys start with AIza (free) · Groq keys start with "
+            "gsk_ (free) · OpenAI keys start with sk-. Leave blank to use the "
+            "key from Streamlit secrets or .env."
         ),
     )
     st.session_state.api_key = (typed_key or "").strip()
