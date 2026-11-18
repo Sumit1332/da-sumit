@@ -87,18 +87,25 @@ def _friendly_key_error(exc: Exception) -> str:
         )
     if "429" in text or "insufficient_quota" in lowered or "quota" in lowered or "credits" in lowered:
         return (
-            "**No credits / quota exhausted (429).**\n\n"
-            "**If you're on Google Gemini (free tier):** you've hit the free "
-            "request limit for this model. Wait a few minutes, or pick a lighter "
-            "model in the sidebar (e.g. `gemini-3.5-flash-lite`). Free limits reset "
-            "daily.\n\n"
-            "**If you're on OpenAI:** the account balance is $0. The API is "
-            "pay-as-you-go and is **not** included with ChatGPT Plus:\n"
+            "**Rate limit reached (429).**\n\n"
+            "**On Google Gemini's free tier** the app now waits and retries "
+            "automatically (15s → 30s → 60s). Free limits come in two flavours:\n\n"
+            "- **Per minute** — the automatic retry usually gets through. Just "
+            "resend your question once and let it sit.\n"
+            "- **Per day** — no retry can help. Wait until the quota resets "
+            "(midnight Pacific), or create a key in a second Google Cloud project "
+            "at https://aistudio.google.com/apikey\n\n"
+            "Stay on **`gemini-3.8-flash`** — the *Lite* models can't run "
+            "Sumit07's data tools.\n\n"
+            "**Tip:** each question costs several model calls (one guard check + "
+            "one per step). Ask for the whole job in a single message, e.g. "
+            "*'clean the data and build the dashboard'*, rather than several short "
+            "follow-ups.\n\n"
+            "**On OpenAI:** the balance is $0. The API is pay-as-you-go and is "
+            "**not** included with ChatGPT Plus:\n"
             "1. https://platform.openai.com/settings/organization/billing/overview\n"
-            "2. **Add payment details** → buy the minimum prepaid amount (~$5)\n"
-            "3. Resend your request — no restart needed\n\n"
-            "Tip: switch to Gemini's free tier by setting `GEMINI_API_KEY` in "
-            "Streamlit secrets."
+            "2. **Add payment details** → buy the minimum prepaid amount (~$5)\n\n"
+            "Or set `GEMINI_API_KEY` in Streamlit secrets to use the free tier."
         )
     if "rate" in lowered and "limit" in lowered:
         return "**Rate limited by OpenAI.** Wait ~30 seconds and try again."
@@ -338,7 +345,9 @@ with tab_chat:
             with st.chat_message("assistant", avatar=AVATAR):
                 status = st.status(f"{AGENT_NAME} is working…", expanded=True)
                 for event in agent.run(prompt, history):
-                    if event["type"] == "tool_call":
+                    if event["type"] == "status":
+                        status.write(event["content"])
+                    elif event["type"] == "tool_call":
                         status.write(f"🔧 `{event['name']}`  {_short_args(event.get('args', {}))}")
                     elif event["type"] == "tool_result":
                         content = event.get("content", "")
