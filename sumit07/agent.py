@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import time
 from typing import Any, Dict, Iterator, List, Optional
 
 from . import AGENT_NAME, config
@@ -58,6 +60,34 @@ def _is_gemini(model: str | None) -> bool:
     return name.startswith("gemini") or name.startswith("gemma")
 
 
+def _is_rate_limit(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__}: {_error_detail(exc)}".lower()
+    return (
+        "429" in text
+        or "rate limit" in text
+        or "resource_exhausted" in text
+        or "quota" in text
+        or "too many requests" in text
+    )
+
+
+def _retry_delay(exc: BaseException, attempt: int) -> float:
+    """Seconds to wait before retrying a rate-limited request."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None) or {}
+    for header in ("retry-after", "Retry-After"):
+        value = headers.get(header)
+        if value:
+            try:
+                return max(1.0, min(float(value), 60.0))
+            except (TypeError, ValueError):
+                pass
+    match = re.search(r"retryDelay\"?\s*[:=]\s*\"?(\d+(?:\.\d+)?)\s*s", _error_detail(exc))
+    if match:
+        return max(1.0, min(float(match.group(1)) + 1.0, 60.0))
+    return min(15.0 * (2**attempt), 60.0)  # 15s, 30s, 60s
+
+
 class Sumit07Agent:
     """Runs the reasoning loop and yields events for a streaming UI."""
 
@@ -94,7 +124,7 @@ class Sumit07Agent:
                 resp = self.client.chat.completions.create(model=model, **kwargs)
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
-                if index == len(tried) - 1:
+                if index == len(tried) - 1 or _is_rate_limit(exc):
                     raise
                 recoverable = _is_model_error(exc) or (
                     retry_on_bad_request and _is_bad_request(exc)
@@ -153,16 +183,34 @@ class Sumit07Agent:
         )
 
         for _ in range(self.max_steps):
-            try:
-                resp = self._chat(
-                    retry_on_bad_request=True,
-                    messages=messages,
-                    tools=self.tools.schemas(),
-                    tool_choice="auto",
-                    temperature=0.2,
-                )
-            except Exception as exc:  # noqa: BLE001
-                yield {"type": "error", "content": _error_text(exc)}
+            resp = None
+            for attempt in range(3):
+                try:
+                    resp = self._chat(
+                        retry_on_bad_request=True,
+                        messages=messages,
+                        tools=self.tools.schemas(),
+                        tool_choice="auto",
+                        temperature=0.2,
+                    )
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    if _is_rate_limit(exc) and attempt < 2:
+                        delay = _retry_delay(exc, attempt)
+                        yield {
+                            "type": "status",
+                            "content": (
+                                f"⏳ Rate limit reached — waiting {delay:.0f}s, "
+                                f"then retrying (attempt {attempt + 2}/3)…"
+                            ),
+                        }
+                        time.sleep(delay)
+                        continue
+                    yield {"type": "error", "content": _error_text(exc)}
+                    return
+
+            if resp is None:
+                yield {"type": "error", "content": "No response from the model."}
                 return
 
             message = resp.choices[0].message
