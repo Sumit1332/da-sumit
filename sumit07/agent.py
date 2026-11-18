@@ -116,8 +116,11 @@ class Sumit07Agent:
         if _is_gemini(self.model):
             kwargs.pop("tool_choice", None)
 
-        candidates = config.fallback_models(self.model)
+        candidates = config.fallback_models(self.model, client=self.client)
         tried: List[str] = [self.model] + [m for m in candidates if m != self.model]
+        if retry_on_bad_request:
+            # One escalation only: every extra attempt burns free-tier quota.
+            tried = tried[:2]
         last_exc: Optional[BaseException] = None
         for index, model in enumerate(tried):
             try:
