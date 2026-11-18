@@ -19,16 +19,18 @@ from sumit07 import config  # noqa: E402
 raw = (
     os.getenv("GEMINI_API_KEY")
     or os.getenv("GOOGLE_API_KEY")
+    or os.getenv("GROQ_API_KEY")
     or os.getenv("OPENAI_API_KEY")
     or ""
 )
 key = raw.strip()
 
 if not key:
-    print("NO KEY: none of GEMINI_API_KEY / GOOGLE_API_KEY / OPENAI_API_KEY is set in .env")
+    print("NO KEY: none of GEMINI_API_KEY / GROQ_API_KEY / OPENAI_API_KEY is set in .env")
     print()
-    print("Free Google Gemini key (no credit card): https://aistudio.google.com/apikey")
-    print('Then add this line to .env:  GEMINI_API_KEY=AIza...your-key...')
+    print("Free keys (no credit card):")
+    print("  Google Gemini: https://aistudio.google.com/apikey   -> GEMINI_API_KEY=AIza...")
+    print("  Groq:          https://console.groq.com/keys        -> GROQ_API_KEY=gsk_...")
     sys.exit(2)
 
 masked = (key[:7] + "..." + key[-4:]) if len(key) > 14 else "(too short)"
@@ -41,6 +43,9 @@ problems = []
 if provider == "gemini":
     if not key.startswith("AIza"):
         problems.append("Gemini keys normally start with 'AIza'")
+elif provider == "groq":
+    if not key.startswith("gsk_"):
+        problems.append("Groq keys normally start with 'gsk_'")
 elif provider == "openai":
     if not key.startswith("sk-"):
         problems.append("OpenAI keys normally start with 'sk-'")
@@ -74,6 +79,9 @@ except Exception as exc:  # noqa: BLE001
     if provider == "openai":
         print("  - 401 Incorrect API key -> create a new key at https://platform.openai.com/api-keys")
         print("  - 429 insufficient_quota -> add credit (pay-as-you-go)")
+    elif provider == "groq":
+        print("  - 401 -> re-create the key at https://console.groq.com/keys")
+        print("  - 429 -> free-tier rate limit; wait a moment or pick a smaller model")
     else:
         print("  - 400 API key not valid -> re-create at https://aistudio.google.com/apikey")
         print("  - 429 -> free-tier rate limit hit; wait a few minutes")
